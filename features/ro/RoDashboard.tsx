@@ -6,9 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/supabase/client'
-import { formatTime, getStatus, todayInColombo } from '@/lib/portal'
-import type { Allocation, Attendance, Route, User } from '@/types'
-import { CheckCircle2, Clock, LogOut, MapPin, Power, Route as RouteIcon, XCircle } from 'lucide-react'
+import { formatDateTime, formatTime, getStatus, todayInColombo } from '@/lib/portal'
+import type { Allocation, Attendance, LocationUpdate, Route, User } from '@/types'
+import { CheckCircle2, Clock, Crosshair, LogOut, MapPin, Navigation, Power, Route as RouteIcon, XCircle } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 export function RoDashboard() {
@@ -16,7 +16,11 @@ export function RoDashboard() {
   const [attendance, setAttendance] = useState<Attendance | null>(null)
   const [routes, setRoutes] = useState<Route[]>([])
   const [allocations, setAllocations] = useState<Allocation[]>([])
+  const [locations, setLocations] = useState<LocationUpdate[]>([])
   const [selectedRoute, setSelectedRoute] = useState('')
+  const [locationNote, setLocationNote] = useState('')
+  const [locationError, setLocationError] = useState('')
+  const [locationTrackingReady, setLocationTrackingReady] = useState(true)
   const [loading, setLoading] = useState(true)
   const [isPending, startTransition] = useTransition()
   const router = useRouter()
@@ -29,17 +33,20 @@ export function RoDashboard() {
     if (!user) return
 
     const today = todayInColombo()
-    const [profileRes, routesRes, allocationsRes, attendanceRes] = await Promise.all([
+    const [profileRes, routesRes, allocationsRes, attendanceRes, locationsRes] = await Promise.all([
       supabase.from('users').select('*').eq('id', user.id).single(),
       supabase.from('routes').select('*').order('route_name'),
       supabase.from('allocations').select('*').eq('user_id', user.id).order('allocation_name'),
       supabase.from('attendance').select('*').eq('user_id', user.id).eq('work_date', today).maybeSingle(),
+      supabase.from('ro_locations').select('*').eq('user_id', user.id).eq('work_date', today).order('created_at', { ascending: false }).limit(8),
     ])
 
     setProfile(profileRes.data as User)
     setRoutes((routesRes.data || []) as Route[])
     setAllocations((allocationsRes.data || []) as Allocation[])
     setAttendance((attendanceRes.data || null) as Attendance | null)
+    setLocations((locationsRes.data || []) as LocationUpdate[])
+    setLocationTrackingReady(!locationsRes.error)
     setSelectedRoute((attendanceRes.data as Attendance | null)?.route_id || '')
     setLoading(false)
   }, [])
@@ -51,6 +58,7 @@ export function RoDashboard() {
   const routeById = useMemo(() => new Map(routes.map((route) => [route.id, route.route_name])), [routes])
   const status = getStatus(attendance)
   const needsRoute = attendance?.is_working_today && !attendance.route_id
+  const latestLocation = locations[0]
 
   function run(action: () => Promise<void>) {
     startTransition(async () => {
@@ -97,6 +105,43 @@ export function RoDashboard() {
       .update({ check_out_time: new Date().toISOString(), remarks: 'Attendance completed from RO portal' })
       .eq('id', attendance.id)
     if (error) throw new Error(error.message)
+  }
+
+  function getBrowserPosition() {
+    return new Promise<GeolocationPosition>((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Location services are not available on this device.'))
+        return
+      }
+
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        maximumAge: 15000,
+        timeout: 20000,
+      })
+    })
+  }
+
+  async function updateLocation() {
+    if (!profile || !attendance) return
+    setLocationError('')
+
+    try {
+      const position = await getBrowserPosition()
+      const { error } = await createClient().from('ro_locations').insert({
+        user_id: profile.id,
+        attendance_id: attendance.id,
+        work_date: todayInColombo(),
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy_meters: position.coords.accuracy,
+        note: locationNote.trim() || null,
+      })
+      if (error) throw new Error(error.message)
+      setLocationNote('')
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Could not capture location.')
+    }
   }
 
   async function signOut() {
@@ -205,6 +250,80 @@ export function RoDashboard() {
                   ))}
                   {allocations.length === 0 && <p className="text-sm text-neutral-500">No allocations assigned yet.</p>}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
+                <CardTitle>Location Updates</CardTitle>
+                {latestLocation && (
+                  <a
+                    href={`https://www.google.com/maps?q=${latestLocation.latitude},${latestLocation.longitude}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium hover:bg-neutral-100 dark:border-neutral-800 dark:hover:bg-neutral-900"
+                  >
+                    <Navigation className="h-4 w-4" />
+                    Open Map
+                  </a>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <input
+                    value={locationNote}
+                    onChange={(event) => setLocationNote(event.target.value)}
+                    placeholder="Optional note, place, or landmark"
+                    className="h-11 rounded-md border border-neutral-200 bg-white px-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-950"
+                  />
+                  <Button disabled={isPending || !attendance.route_id || !locationTrackingReady} onClick={() => run(updateLocation)}>
+                    <Crosshair className="h-4 w-4" />
+                    Update Location
+                  </Button>
+                </div>
+
+                {!locationTrackingReady && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                    Location tracking database table is not active yet. Run supabase/location-upgrade.sql once in Supabase.
+                  </div>
+                )}
+
+                {locationError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                    {locationError}
+                  </div>
+                )}
+
+                {latestLocation ? (
+                  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+                    <p className="text-xs font-medium uppercase tracking-normal text-neutral-500">Current Location</p>
+                    <p className="mt-1 text-sm font-semibold">{formatDateTime(latestLocation.created_at)}</p>
+                    <p className="mt-1 text-sm text-neutral-500">
+                      Accuracy: {latestLocation.accuracy_meters ? `${Math.round(latestLocation.accuracy_meters)}m` : '-'}
+                    </p>
+                    {latestLocation.note && <p className="mt-2 text-sm">{latestLocation.note}</p>}
+                  </div>
+                ) : (
+                  <p className="text-sm text-neutral-500">No location update sent yet today.</p>
+                )}
+
+                {locations.length > 1 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-normal text-neutral-500">Past Locations Today</p>
+                    {locations.slice(1).map((location) => (
+                      <a
+                        key={location.id}
+                        href={`https://www.google.com/maps?q=${location.latitude},${location.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 px-3 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-800 dark:hover:bg-neutral-900"
+                      >
+                        <span>{formatDateTime(location.created_at)}</span>
+                        <span className="text-neutral-500">{location.note || 'Map'}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 

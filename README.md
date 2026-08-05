@@ -38,10 +38,21 @@ The script creates:
 - `routes`
 - `allocations`
 - `attendance`
+- `ro_locations`
 - RLS policies
 - Realtime publication entries
 - Admin, Sub Admin, and 30 Recovery Officer demo accounts
 - 10 routes, sample allocations, and previous attendance history
+
+## Add Location Tracking To An Existing Database
+
+If you already ran the first schema and have live data, do not rerun the full `schema.sql` unless you want to reset the demo database. Run only:
+
+```sql
+-- paste the full contents of supabase/location-upgrade.sql
+```
+
+This adds the RO GPS location history table, RLS policies, and realtime updates without deleting existing users, attendance, routes, or allocations.
 
 ## Demo Accounts
 

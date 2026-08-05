@@ -43,7 +43,20 @@ export interface Attendance {
   routes?: Route
 }
 
+export interface LocationUpdate {
+  id: string
+  user_id: string
+  attendance_id: string | null
+  work_date: string
+  latitude: number
+  longitude: number
+  accuracy_meters: number | null
+  note: string | null
+  created_at: string
+}
+
 export interface DailyAttendanceRow {
+  user_id: string
   employee_no: string
   name: string
   role: string

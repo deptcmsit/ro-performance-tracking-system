@@ -49,6 +49,7 @@ export function buildDailyRows(
       const record = attendanceByUser.get(user.id)
       const status = getStatus(record)
       return {
+        user_id: user.id,
         employee_no: user.employee_no || '-',
         name: user.name,
         role: user.role,
